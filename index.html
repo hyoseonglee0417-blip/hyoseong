@@ -129,7 +129,7 @@
 <div id="adminBar">
   <button id="adminBtn" type="button" onclick="toggleAdmin()">🔑 관리자 (공지 작성)</button>
   <span id="adminStatus" class="note">강남사택 입주자 안내 — 생활 안내·가스 검침·미납 조회·공지</span>
-  <span id="fbStatus" class="note" style="margin-left:auto">개인정보 미저장 · 안전 모드</span>
+  <span id="fbStatus" class="note" style="margin-left:auto">동기화: 연결 중…</span>
 </div>
 <nav id="nav">
   <button class="active" data-tab="info">입주·생활 안내</button>
@@ -1073,13 +1073,18 @@ function downloadBlob(content,name,type){
 }
 const STORAGE_KEY='gangnam_sataek_db_v1';
 let _fbReady=false, _fbDoc=null, _fbApplying=false;
+// 입주자용은 개인정보가 없는 항목(공지·가스·공지 비밀번호)만 파이어베이스로 공유합니다.
+// 총무가 업로드한 미납 데이터(이름·납부내역)는 절대 전송하지 않습니다.
+function residentShared(){
+  return { notices: DB.notices||[], gas: DB.gas||{}, adminPwHash: DB.adminPwHash||null };
+}
 function persist(){
   // 1) 브라우저 로컬 저장 (오프라인·즉시)
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }
   catch(e){ /* 용량초과 등은 무시 */ }
-  // 2) 파이어베이스 동기화 — ref가 준비되면 항상 전송(원격 반영 중 재전송만 차단)
+  // 2) 파이어베이스 동기화 — 공지·가스만 전송(개인정보 제외)
   if(_fbDoc && !_fbApplying){
-    try{ _fbDoc.set({ data: JSON.stringify(DB), updatedAt: Date.now() }); }
+    try{ _fbDoc.set({ data: JSON.stringify(residentShared()), updatedAt: Date.now() }); }
     catch(e){ /* 네트워크 오류는 무시(로컬은 이미 저장됨) */ }
   }
 }
@@ -1430,9 +1435,37 @@ const firebaseConfig = {
   appId: "1:3115781571:web:f5d7bc4d329bc528800176"
 };
 function initFirebase(){
-  // 입주자용은 파이어베이스에 연결하지 않습니다.
-  // 총무용 전체 데이터(이름·미납·입금 내역)가 이 공개 페이지로 흘러들어오는 것을 원천 차단합니다.
-  setFbStatus('개인정보 미저장 · 안전 모드');
+  // 입주자용: 개인정보 없는 공지·가스만 실시간 공유. 총무용(gangnam/shared)과 분리된 경로 사용.
+  try{
+    if(typeof firebase==='undefined'){ setFbStatus('오프라인(로컬 저장만)'); return; }
+    firebase.initializeApp(firebaseConfig);
+    const db=firebase.database();
+    _fbDoc=db.ref('gangnam/resident');   // 입주자 공유 전용(공지·가스만)
+    _fbDoc.on('value', snap=>{
+      const remote=snap.val();
+      if(!remote || !remote.data){
+        // 원격이 비어있으면 현재(이 기기)의 공지·가스를 최초 업로드
+        _fbReady=true; persist();
+        setFbStatus('연결됨 · 공지·가스 공유 시작'); return;
+      }
+      try{
+        _fbApplying=true;                 // 원격 반영 중엔 되쏘지 않음
+        const o=JSON.parse(remote.data);
+        // 공지·가스·공지비번만 병합(미납 등 개인정보는 건드리지 않음)
+        if(Array.isArray(o.notices)) DB.notices=o.notices;
+        if(o.gas && typeof o.gas==='object') DB.gas=o.gas;
+        if(o.adminPwHash) DB.adminPwHash=o.adminPwHash;
+        try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
+        renderNotice(); renderGas();
+      }catch(e){}
+      finally{ _fbApplying=false; }
+      _fbReady=true;
+      setFbStatus('연결됨 · 공지·가스 실시간 공유');
+    }, err=>{
+      _fbReady=false;
+      setFbStatus('연결 실패(로컬 저장만) — 규칙/주소 확인 필요');
+    });
+  }catch(e){ setFbStatus('오프라인(로컬 저장만)'); }
 }
 function setFbStatus(msg){
   const el=document.getElementById('fbStatus');
