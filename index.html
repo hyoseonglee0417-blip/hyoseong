@@ -136,12 +136,14 @@
   <button data-tab="move">퇴거 방법</button>
   <button data-tab="gas">가스 검침</button>
   <button data-tab="unit">미납 세대 조회</button>
+  <button data-tab="bankpub">입출금 현황</button>
   <button data-tab="notice">공지사항</button>
 </nav>
 <main>
 <!--INFO--><section class="tab active" id="tab-info"></section>
 <!--MOVE--><section class="tab" id="tab-move"></section>
 <!--UNIT--><section class="tab" id="tab-unit"></section>
+<!--BANKPUB--><section class="tab" id="tab-bankpub"></section>
 <!--GAS--><section class="tab" id="tab-gas"></section>
 <!--NOTICE--><section class="tab" id="tab-notice"></section>
 </main>
@@ -563,10 +565,10 @@ function isDue(unit, m){
 }
 function effStart(unit){ return DB.residents[unit]?.since || LEDGER_START; }
 function allMonths(){
-  const set=new Set([...Object.keys(DB.payments),...Object.keys(DB.monthlySummary),...Object.keys(DB.otherTx)]);
+  const set=new Set([...Object.keys(DB.payments||{}),...Object.keys(DB.monthlySummary||{}),...Object.keys(DB.otherTx||{})]);
   // 관리대장 적용 시작월 ~ 현재월까지 포함 (납부 의무 구간 표시용)
   let minN=ymNum(curYM());
-  Object.keys(DB.residents).forEach(u=>{const e=effStart(u); if(e) minN=Math.min(minN,ymNum(e));});
+  Object.keys(DB.residents||{}).forEach(u=>{const e=effStart(u); if(e) minN=Math.min(minN,ymNum(e));});
   for(let n=minN;n<=ymNum(curYM());n++) set.add(ymKey(n));
   return [...set].filter(Boolean).sort();
 }
@@ -708,70 +710,41 @@ function renderFee(){
 // ============ 렌더링: 미납 세대 조회 (공개=익명 / 관리자=이름·상세) ============
 let _selUnit = null;
 function renderUnit(){
-  const units = allUnits();
-  const months = allMonths();
-  const nowK = curYM();
-  if(!_selUnit || !DB.residents[_selUnit]) _selUnit = units[0]||null;
-
-  // 미납 세대 목록: 면제 제외, 적용시작월 이후 도래분만
-  const unpaidList = units.filter(u=>!DB.residents[u].exempt).map(u=>{
-    const miss = months.filter(m=>isDue(u,m) && !DB.payments[m]?.[u]);
-    return {u, miss};
-  }).filter(x=>x.miss.length>0).sort((a,b)=>b.miss.length-a.miss.length);
-
-  const hasData = (window._residentDataLoaded===true);
-
+  const img = DB.unitImage || '';
   let html = `
   <div class="card">
     <h2>미납 세대 조회</h2>
-    <p class="note">이 페이지에는 <b>개인정보가 저장되어 있지 않습니다.</b> 총무가 아래에 최신 파일(.json)을 올리면, 그때만 미납 현황이 표시됩니다. <b>이름은 표시되지 않고 동호수와 미납 월만</b> 보입니다.</p>
+    <p class="note">총무가 올린 미납 현황 이미지를 안내합니다.${ADMIN?' <b>관리자 모드</b>에서 이미지를 올리거나 교체할 수 있습니다.':''}</p>
+    ${ADMIN?`
     <div class="row" style="align-items:center;gap:10px;margin-top:8px">
-      <button class="btn" onclick="document.getElementById('unitFile').click()">📂 미납 현황 파일 올리기</button>
-      <input id="unitFile" type="file" accept="application/json,.json" style="display:none">
-      <span class="note">총무에게 받은 강남사택_데이터_....json 파일</span>
-    </div>
+      <button class="btn" onclick="document.getElementById('unitImgFile').click()">📷 미납 현황 이미지 올리기</button>
+      <input id="unitImgFile" type="file" accept="image/*" style="display:none">
+      ${img?`<button class="btn sec" onclick="clearUnitImage()">이미지 삭제</button>`:''}
+      <span class="note">캡처한 미납 현황 그림(png·jpg)</span>
+    </div>`:''}
   </div>`;
 
-  if(!hasData){
-    html += `<div class="card"><p class="note" style="margin:0">아직 올라온 미납 현황이 없습니다. 총무가 파일을 올리면 여기에 표시됩니다.</p></div>`;
-    document.getElementById('tab-unit').innerHTML = html;
-    const fi=document.getElementById('unitFile');
-    if(fi) fi.onchange=e=>{ if(e.target.files[0]) loadData(e.target.files[0]); };
-    return;
+  if(img){
+    html += `<div class="card"><img src="${img}" alt="미납 현황" style="max-width:100%;height:auto;border-radius:8px;display:block"></div>`;
+  } else {
+    html += `<div class="card"><p class="note" style="margin:0">아직 올라온 미납 현황이 없습니다.${ADMIN?' 위 버튼으로 이미지를 올려주세요.':' 총무가 올리면 여기에 표시됩니다.'}</p></div>`;
   }
 
-
-  // 미납 세대 모아보기 (동호수·미납개월·미납월만, 이름 없음)
-  html += `
-  <div class="card">
-    <h2>미납 세대 모아보기 <span class="note">(현재까지 도래한 관리비 기준)</span></h2>
-    ${unpaidList.length===0?'<p class="note">현재 미납 세대가 없습니다. ✓</p>':`
-    <table>
-      <tr><th>동호수</th><th>미납 개월</th><th>미납 월</th></tr>
-      ${unpaidList.map(x=>`<tr>
-        <td class="name">${x.u}</td>
-        <td><span class="pill no">${x.miss.length}개월</span></td>
-        <td class="note">${x.miss.join(', ')}</td>
-      </tr>`).join('')}
-    </table>
-    <p class="note" style="margin-top:8px">개인정보 보호를 위해 이름은 표시하지 않습니다. 동호수와 미납 월만 안내합니다.</p>`}
-  </div>`;
-
   document.getElementById('tab-unit').innerHTML = html;
-  const fi=document.getElementById('unitFile');
-  if(fi) fi.onchange=e=>{ if(e.target.files[0]) loadData(e.target.files[0]); };
-  const sel=document.getElementById('unitSel');
-  if(sel) sel.onchange=()=>{_selUnit=sel.value;renderUnit();};
-  // 입금일: 값 입력/Enter 시 저장하되 표를 다시 그리지 않음 → 입력값이 리셋되지 않음
-  document.querySelectorAll('[data-pd-m]').forEach(inp=>inp.onchange=()=>{
-    const norm=setPayDate(inp.dataset.pdM, inp.dataset.pdU, inp.value);
-    if(norm!==undefined) inp.value=norm;   // 정규화된 값만 칸에 다시 표시(재렌더 없음)
-  });
-  // 납부상태: 드롭다운으로 직접 선택
-  document.querySelectorAll('[data-ps-m]').forEach(selEl=>selEl.onchange=()=>{
-    setPayStatus(selEl.dataset.psM, selEl.dataset.psU, selEl.value);
-  });
+  const fi=document.getElementById('unitImgFile');
+  if(fi) fi.onchange=e=>{ if(e.target.files[0]) uploadImage(e.target.files[0],'unitImage'); };
 }
+function uploadImage(file, key){
+  if(!ADMIN){ alert('이미지 업로드는 관리자만 가능합니다.'); return; }
+  if(!file.type.startsWith('image/')){ alert('이미지 파일(png·jpg)만 올릴 수 있습니다.'); return; }
+  if(file.size > 4*1024*1024){ alert('이미지가 너무 큽니다. 4MB 이하로 올려주세요.'); return; }
+  const r=new FileReader();
+  r.onload=e=>{ DB[key]=e.target.result; persist(); renderAll();
+    alert('이미지를 올렸습니다. 입주자 화면에 표시됩니다.'); };
+  r.readAsDataURL(file);
+}
+function clearUnitImage(){ if(!ADMIN) return; delete DB.unitImage; persist(); renderUnit(); }
+function clearBankImage(){ if(!ADMIN) return; delete DB.bankImage; persist(); renderBankPub(); }
 function setPayStatus(m,u,status){
   if(!ADMIN) return;
   if(!DB.manualOverrides) DB.manualOverrides={};
@@ -1076,7 +1049,8 @@ let _fbReady=false, _fbDoc=null, _fbApplying=false;
 // 입주자용은 개인정보가 없는 항목(공지·가스·공지 비밀번호)만 파이어베이스로 공유합니다.
 // 총무가 업로드한 미납 데이터(이름·납부내역)는 절대 전송하지 않습니다.
 function residentShared(){
-  return { notices: DB.notices||[], gas: DB.gas||{}, adminPwHash: DB.adminPwHash||null };
+  return { notices: DB.notices||[], gas: DB.gas||{}, adminPwHash: DB.adminPwHash||null,
+           unitImage: DB.unitImage||'', bankImage: DB.bankImage||'' };
 }
 function persist(){
   // 1) 브라우저 로컬 저장 (오프라인·즉시)
@@ -1105,19 +1079,21 @@ function loadData(file){
   r.onload=e=>{ try{ const o=JSON.parse(e.target.result);
     Object.keys(DB).forEach(k=>delete DB[k]);
     Object.assign(DB,o);
-    if(!DB.feeDeposits)DB.feeDeposits={};
+    if(!DB.residents)DB.residents={};
+    if(!DB.payments)DB.payments={};
     if(!DB.manualOverrides)DB.manualOverrides={};
-    if(!DB.expenseNotes)DB.expenseNotes={};
-    if(typeof DB.startBalance!=='number')DB.startBalance=DB._startBalance||0;
     if(!DB.monthlySummary)DB.monthlySummary={};
-    seedFromLedger();
-    seedBankFinance();
-    _seenTx=new Set();
-    allocatePayments();
-    computeBalances();
-    window._residentDataLoaded=true;   // 업로드 완료 표시 → 미납 목록 표시
-    renderAll();   // 입주자용: 저장/업로드하지 않음 — 이 브라우저 화면에만 표시
-    alert('미납 현황을 불러왔습니다. (이 파일은 저장되지 않으며 새로고침하면 사라집니다.)');
+    if(!DB.otherTx)DB.otherTx={};
+    if(!DB.expenseNotes)DB.expenseNotes={};
+    if(!DB.incomeNotes)DB.incomeNotes={};
+    if(!DB.gas)DB.gas={};
+    if(!DB.notices)DB.notices=[];
+    if(typeof DB.startBalance!=='number')DB.startBalance=DB._startBalance||0;
+    // 입주자용은 업로드된 값을 그대로 사용합니다(총무용에서 이미 계산된 데이터).
+    // 통장 원본 상수(LEDGER/BANK_*)가 비어 있으므로 재계산 파이프라인은 실행하지 않습니다.
+    window._residentDataLoaded=true;   // 업로드 완료 표시
+    renderAll();   // 저장/업로드하지 않음 — 이 브라우저 화면에만 표시
+    alert('현황을 불러왔습니다. (이 파일은 저장되지 않으며 새로고침하면 사라집니다.)');
   }catch(err){alert('파일을 읽을 수 없습니다: '+err.message);} };
   r.readAsText(file);
 }
@@ -1216,73 +1192,31 @@ let _pubIncOpen={}, _pubExpOpen={};
 function togglePubInc(mk){ _pubIncOpen[mk]=!_pubIncOpen[mk]; renderBankPub(); }
 function togglePubExp(mk){ _pubExpOpen[mk]=!_pubExpOpen[mk]; renderBankPub(); }
 function renderBankPub(){
-  const months = Object.keys(BANK_MONTHLY).sort();
-  let running=null;
-  const rows = months.map(mk=>{
-    const m=DB.monthlySummary[mk]||{income:0,expense:0};
-    const real=BANK_MONTHLY[mk];
-    let prev,bal;
-    if(real && real.prevBal!==undefined){
-      prev=real.prevBal;
-      bal=(real.bal!==undefined)?real.bal:(prev+(m.income||0)-(m.expense||0));
-    } else {
-      prev=(running!==null)?running:(DB.startBalance||0);
-      bal=prev+(m.income||0)-(m.expense||0);
-    }
-    running=bal;
-    return {mk, prev, income:m.income, expense:m.expense, bal};
-  });
-  const totOut=rows.reduce((a,r)=>a+r.expense,0);
-  const curBal = rows.length?rows[rows.length-1].bal:(DB.startBalance||0);
-
-  // 지출 분류별 합계(개인 이름 없이 '분류'만 집계) — 투명성 제공
-  const catSum={};
-  Object.keys(BANK_EXPENSES||{}).forEach(mk=>{
-    (BANK_EXPENSES[mk]||[]).forEach((e,i)=>{
-      const k=expKey(mk,i);
-      const cat=(DB.expenseNotes[k]&&DB.expenseNotes[k].cat)||e.cat||'기타지출';
-      catSum[cat]=(catSum[cat]||0)+e.amount;
-    });
-  });
-  const catRows=Object.entries(catSum).sort((a,b)=>b[1]-a[1]);
-
-  let html=`
+  const el=document.getElementById('tab-bankpub');
+  if(!el) return;
+  const img = DB.bankImage || '';
+  let html = `
   <div class="card">
     <h2>입출금 현황 <span class="note">(사택 공동 회계)</span></h2>
-    <div class="infoblock">사택 관리비 통장의 월별 수입·지출과 잔액입니다. 개인 입금 내역(이름 등)은 표시되지 않으며, 자세한 개별 확인이 필요하면 총무에게 문의하세요. <span class="note">(화면 버전 v7)</span></div>
-    <div class="stat" style="margin-top:12px">
-      <div class="statbox"><div class="t">현재 잔액</div><div class="n">${won(curBal)}</div></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>월별 수입·지출 현황</h2>
-    <table class="mono">
-      <tr><th>월</th><th>전월잔액</th><th>수입</th><th>지출</th><th>잔액</th></tr>
-      ${rows.map(r=>{
-        const detailable = r.mk > '2025-12';  // 2026-01부터 세부내역 펼침
-        const incCell = detailable
-          ? `<td style="color:var(--accent);cursor:pointer;text-decoration:underline" onclick="togglePubInc('${r.mk}')" title="클릭하면 수입 세부내역">${won(r.income)} ▾</td>`
-          : `<td style="color:var(--accent)">${won(r.income)}</td>`;
-        const expCell = detailable
-          ? `<td style="color:var(--warn);cursor:pointer;text-decoration:underline" onclick="togglePubExp('${r.mk}')" title="클릭하면 지출 세부내역">${won(r.expense)} ▾</td>`
-          : `<td style="color:var(--warn)">${won(r.expense)}</td>`;
-        return `
-        <tr>
-          <td><b>${r.mk}</b></td>
-          <td>${won(r.prev)}</td>
-          ${incCell}
-          ${expCell}
-          <td><b>${won(r.bal)}</b></td>
-        </tr>
-        ${(detailable && _pubIncOpen[r.mk])?`<tr><td colspan="5" style="padding:0">${incomeDetailHTML(r.mk)}</td></tr>`:''}
-        ${(detailable && _pubExpOpen[r.mk])?`<tr><td colspan="5" style="padding:0">${expenseDetailHTML(r.mk)}</td></tr>`:''}
-      `;}).join('')}
-    </table>
-    <p class="note">2026년 1월부터 수입·지출 금액을 클릭하면 세부 내역이 펼쳐집니다. 개인 이름은 성만 표시됩니다(예: 홍**). 수입은 관리비·보증금 등 입금, 지출은 전기·가스·세금·수리 등 공동경비입니다.</p>
+    <p class="note">총무가 올린 입출금 현황 이미지를 안내합니다.${ADMIN?' <b>관리자 모드</b>에서 이미지를 올리거나 교체할 수 있습니다.':''}</p>
+    ${ADMIN?`
+    <div class="row" style="align-items:center;gap:10px;margin-top:8px">
+      <button class="btn" onclick="document.getElementById('bankImgFile').click()">📷 입출금 현황 이미지 올리기</button>
+      <input id="bankImgFile" type="file" accept="image/*" style="display:none">
+      ${img?`<button class="btn sec" onclick="clearBankImage()">이미지 삭제</button>`:''}
+      <span class="note">캡처한 입출금 현황 그림(png·jpg)</span>
+    </div>`:''}
   </div>`;
 
-  document.getElementById('tab-bankpub').innerHTML=html;
+  if(img){
+    html += `<div class="card"><img src="${img}" alt="입출금 현황" style="max-width:100%;height:auto;border-radius:8px;display:block"></div>`;
+  } else {
+    html += `<div class="card"><p class="note" style="margin:0">아직 올라온 입출금 현황이 없습니다.${ADMIN?' 위 버튼으로 이미지를 올려주세요.':' 총무가 올리면 여기에 표시됩니다.'}</p></div>`;
+  }
+
+  el.innerHTML=html;
+  const fi=document.getElementById('bankImgFile');
+  if(fi) fi.onchange=e=>{ if(e.target.files[0]) uploadImage(e.target.files[0],'bankImage'); };
 }
 function bindExpenseNotes(){
   if(!ADMIN) return; // 공개 모드는 보기 전용
@@ -1412,7 +1346,7 @@ function seedBankFinance(){
 }
 function renderAll(){
   document.body.classList.toggle('public', !ADMIN);   // 로그인 전엔 공개, 로그인하면 관리자
-  renderInfo();renderMove();renderUnit();renderGas();renderNotice();
+  renderInfo();renderMove();renderUnit();renderBankPub();renderGas();renderNotice();
 }
 // 시작: 브라우저에 저장된 데이터가 있으면 먼저 복원 (새로고침해도 유지)
 const _hadSaved = loadPersisted();
@@ -1426,13 +1360,13 @@ renderAll();
 // ============ 파이어베이스 동기화 (Realtime Database — 여러 기기 공유 + 새로고침 유지) ============
 // 본인 프로젝트 설정값. 웹 apiKey는 공개되어도 되는 값이며, 실제 보호는 보안 규칙으로 합니다.
 const firebaseConfig = {
-  apiKey: "AIzaSyDmkfAnUi136J7yRKM-750-NWWfzSXz_G8",
-  authDomain: "home3-21-1cb45.firebaseapp.com",
-  databaseURL: "https://home3-21-1cb45-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "home3-21-1cb45",
-  storageBucket: "home3-21-1cb45.firebasestorage.app",
-  messagingSenderId: "3115781571",
-  appId: "1:3115781571:web:f5d7bc4d329bc528800176"
+  apiKey: "AIzaSyD7dsYNQsSdx7-qnArIVKK2VUbMp54_fsQ",
+  authDomain: "home-effb5.firebaseapp.com",
+  databaseURL: "https://home-effb5-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "home-effb5",
+  storageBucket: "home-effb5.firebasestorage.app",
+  messagingSenderId: "703627374596",
+  appId: "1:703627374596:web:360b3485e132e9444f8551"
 };
 function initFirebase(){
   // 입주자용: 개인정보 없는 공지·가스만 실시간 공유. 총무용(gangnam/shared)과 분리된 경로 사용.
@@ -1451,12 +1385,14 @@ function initFirebase(){
       try{
         _fbApplying=true;                 // 원격 반영 중엔 되쏘지 않음
         const o=JSON.parse(remote.data);
-        // 공지·가스·공지비번만 병합(미납 등 개인정보는 건드리지 않음)
+        // 공지·가스·공지비번·현황 이미지만 병합(개인정보는 건드리지 않음)
         if(Array.isArray(o.notices)) DB.notices=o.notices;
         if(o.gas && typeof o.gas==='object') DB.gas=o.gas;
         if(o.adminPwHash) DB.adminPwHash=o.adminPwHash;
+        if('unitImage' in o) DB.unitImage=o.unitImage;
+        if('bankImage' in o) DB.bankImage=o.bankImage;
         try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }catch(e){}
-        renderNotice(); renderGas();
+        renderNotice(); renderGas(); renderUnit(); renderBankPub();
       }catch(e){}
       finally{ _fbApplying=false; }
       _fbReady=true;
